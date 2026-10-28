@@ -13,10 +13,10 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/Snipa22/go-tari-lib/p2p"
-	pb "github.com/Snipa22/go-tari-lib/p2p/proto"
+	"github.com/Jagtech-Services/go-tari-lib/v3/p2p"
+	pb "github.com/Jagtech-Services/go-tari-lib/v3/p2p/proto"
 
-	"github.com/Snipa22/go-tari-netmap/internal/storage"
+	"github.com/Jagtech-Services/go-tari-netmap/internal/storage"
 )
 
 // defaultTestDSN matches this sandbox's real Postgres 17 instance: unix
@@ -576,10 +576,7 @@ func TestPeerListProviderFiltersConfirmedRecentlyReachable(t *testing.T) {
 
 	r := &dbBackedResponder{store: store, logf: t.Logf, metrics: mustTestResponderMetrics(t)}
 
-	peers, err := r.peerListProvider(ctx)
-	if err != nil {
-		t.Fatalf("peerListProvider: %v", err)
-	}
+	peers := r.peerListProvider()
 
 	gotPubkeys := map[string]*pb.PeerInfo{}
 	for _, p := range peers {
@@ -625,14 +622,10 @@ func TestPeerListProviderFiltersConfirmedRecentlyReachable(t *testing.T) {
 // the ordinary "nothing to serve yet" case (distinct from an actual DB failure).
 func TestPeerListProviderEmptyWhenNothingQualifies(t *testing.T) {
 	store := newTestStore(t)
-	ctx := context.Background()
 
 	r := &dbBackedResponder{store: store, logf: t.Logf, metrics: mustTestResponderMetrics(t)}
 
-	peers, err := r.peerListProvider(ctx)
-	if err != nil {
-		t.Fatalf("peerListProvider: %v", err)
-	}
+	peers := r.peerListProvider()
 	if len(peers) != 0 {
 		t.Fatalf("len(peers) = %d, want 0", len(peers))
 	}

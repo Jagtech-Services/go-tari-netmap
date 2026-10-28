@@ -6,7 +6,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/Snipa22/go-tari-netmap/internal/netaddr"
+	"github.com/Jagtech-Services/go-tari-netmap/internal/netaddr"
 )
 
 // onionHostPattern matches a syntactically plausible Tor onion address:

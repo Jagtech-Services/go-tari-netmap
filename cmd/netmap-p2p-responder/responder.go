@@ -9,12 +9,12 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/Snipa22/go-tari-lib/p2p"
-	pb "github.com/Snipa22/go-tari-lib/p2p/proto"
+	"github.com/Jagtech-Services/go-tari-lib/v3/p2p"
+	pb "github.com/Jagtech-Services/go-tari-lib/v3/p2p/proto"
 
-	"github.com/Snipa22/go-tari-netmap/internal/api"
-	"github.com/Snipa22/go-tari-netmap/internal/collector"
-	"github.com/Snipa22/go-tari-netmap/internal/storage"
+	"github.com/Jagtech-Services/go-tari-netmap/internal/api"
+	"github.com/Jagtech-Services/go-tari-netmap/internal/collector"
+	"github.com/Jagtech-Services/go-tari-netmap/internal/storage"
 )
 
 // dbCallTimeout bounds every individual storage.Store call this binary makes from
@@ -259,12 +259,29 @@ func isClaimedAddressAllowed(hostPort string) bool {
 // ceiling on the source list itself, so a request with N=0 ("give me everything") still can't
 // walk away with an unbounded response.
 //
-// A non-nil error here is exactly what ResponderConfig.PeerListProvider's doc comment describes
-// as "no peers available right now": go-tari-lib/p2p.Serve logs it and serves an EMPTY list
-// rather than crashing or hanging the substream/connection — see PeerListProvider's own doc
-// comment in go-tari-lib/p2p/responder.go.
-func (r *dbBackedResponder) peerListProvider(ctx context.Context) ([]*pb.PeerInfo, error) {
-	ctx, cancel := context.WithTimeout(ctx, dbCallTimeout)
+// IMPORTANT — go-tari-lib/v3 (v3.1.0, the tagged release this repo now pins) API gap: the
+// original (ctx context.Context) ([]*pb.PeerInfo, error) signature this method used to have
+// matched ResponderConfig.PeerListProvider as it existed on go-tari-lib's feat/db-backed-peer-
+// list branch (commit 36f40b9, "make PeerListProvider context-aware and error-tolerant") — but
+// that branch was NEVER merged into go-tari-lib's main and v3.1.0 does NOT include it (confirmed
+// via `git log --all` / `git branch --contains`: 36f40b9 and 5339107 only exist on
+// feat/db-backed-peer-list, not on main or any tag). go-tari-lib/v3's actually-tagged
+// p2p.ResponderConfig.PeerListProvider is the original, simpler `func() []*pb.PeerInfo` — no
+// ctx, no error return at all (see p2p/responder.go's knownPeers(), which just calls
+// `c.PeerListProvider()` with no error handling whatsoever). This method's signature below has
+// been adapted to match that real, tagged API: ctx is derived internally from
+// context.Background() instead of being threaded in from Serve (so a cancelled Serve ctx no
+// longer promptly cancels an in-flight DB call — it is still bounded by dbCallTimeout below,
+// just not cancelled early), and any error is logged via r.logf and converted to an empty
+// result instead of being returned (preserving this method's previously-documented "no peers
+// available right now -> empty list" external behavior, just enforced here instead of by
+// go-tari-lib, since the real API gives it nowhere to put an error at all).
+//
+// This is a genuine upstream capability loss, not a stylistic choice — flag it back if DB-call
+// cancellation-on-shutdown or structured error propagation for this path matters before
+// go-tari-lib's feat/db-backed-peer-list branch is merged and a new tag is cut upstream.
+func (r *dbBackedResponder) peerListProvider() []*pb.PeerInfo {
+	ctx, cancel := context.WithTimeout(context.Background(), dbCallTimeout)
 	defer cancel()
 
 	confirmed := true
@@ -275,10 +292,11 @@ func (r *dbBackedResponder) peerListProvider(ctx context.Context) ([]*pb.PeerInf
 		Limit:          maxServedPeers,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("listing known-good confirmed nodes: %w", err)
+		r.logf("p2p-responder: peerListProvider: listing known-good confirmed nodes: %v", err)
+		return nil
 	}
 	if len(nodes) == 0 {
-		return nil, nil
+		return nil
 	}
 
 	nodeIDs := make([]uuid.UUID, len(nodes))
@@ -287,7 +305,8 @@ func (r *dbBackedResponder) peerListProvider(ctx context.Context) ([]*pb.PeerInf
 	}
 	addrsByNode, err := r.store.ListNodeAddressesForNodes(ctx, nodeIDs)
 	if err != nil {
-		return nil, fmt.Errorf("batch-listing node addresses: %w", err)
+		r.logf("p2p-responder: peerListProvider: batch-listing node addresses: %v", err)
+		return nil
 	}
 
 	peers := make([]*pb.PeerInfo, 0, len(nodes))
@@ -327,7 +346,7 @@ func (r *dbBackedResponder) peerListProvider(ctx context.Context) ([]*pb.PeerInf
 			},
 		})
 	}
-	return peers, nil
+	return peers
 }
 
 // encodeStoredAddress converts a storage-shaped "host:port" address (see

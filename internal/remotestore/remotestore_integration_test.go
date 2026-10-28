@@ -11,9 +11,9 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/Snipa22/go-tari-netmap/internal/adminauth"
-	"github.com/Snipa22/go-tari-netmap/internal/api"
-	"github.com/Snipa22/go-tari-netmap/internal/storage"
+	"github.com/Jagtech-Services/go-tari-netmap/internal/adminauth"
+	"github.com/Jagtech-Services/go-tari-netmap/internal/api"
+	"github.com/Jagtech-Services/go-tari-netmap/internal/storage"
 )
 
 // This file is an end-to-end integration test of this package's wire contract against a REAL

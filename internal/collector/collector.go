@@ -21,9 +21,9 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
-	"github.com/Snipa22/go-tari-netmap/internal/geoip"
-	"github.com/Snipa22/go-tari-netmap/internal/netaddr"
-	"github.com/Snipa22/go-tari-netmap/internal/storage"
+	"github.com/Jagtech-Services/go-tari-netmap/internal/geoip"
+	"github.com/Jagtech-Services/go-tari-netmap/internal/netaddr"
+	"github.com/Jagtech-Services/go-tari-netmap/internal/storage"
 )
 
 // PollIntervalGeneric is the minimum interval between polls of a discovered/generic node.

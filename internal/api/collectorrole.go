@@ -1,6 +1,6 @@
 package api
 
-import "github.com/Snipa22/go-tari-netmap/internal/storage"
+import "github.com/Jagtech-Services/go-tari-netmap/internal/storage"
 
 // collectorRoleTagValue is the tags["role"] value POST /internal/collectors/report (see
 // collector_report.go's handleCollectorReport) sets on a remote collector satellite's own

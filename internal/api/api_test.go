@@ -19,10 +19,10 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/Snipa22/go-tari-netmap/internal/adminauth"
-	"github.com/Snipa22/go-tari-netmap/internal/api"
-	"github.com/Snipa22/go-tari-netmap/internal/collector"
-	"github.com/Snipa22/go-tari-netmap/internal/storage"
+	"github.com/Jagtech-Services/go-tari-netmap/internal/adminauth"
+	"github.com/Jagtech-Services/go-tari-netmap/internal/api"
+	"github.com/Jagtech-Services/go-tari-netmap/internal/collector"
+	"github.com/Jagtech-Services/go-tari-netmap/internal/storage"
 )
 
 // defaultTestDSN matches this sandbox's real Postgres 17 instance: unix

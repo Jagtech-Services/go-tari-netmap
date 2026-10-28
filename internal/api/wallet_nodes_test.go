@@ -10,10 +10,10 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/Snipa22/go-tari-netmap/internal/adminauth"
-	"github.com/Snipa22/go-tari-netmap/internal/api"
-	"github.com/Snipa22/go-tari-netmap/internal/collector"
-	"github.com/Snipa22/go-tari-netmap/internal/storage"
+	"github.com/Jagtech-Services/go-tari-netmap/internal/adminauth"
+	"github.com/Jagtech-Services/go-tari-netmap/internal/api"
+	"github.com/Jagtech-Services/go-tari-netmap/internal/collector"
+	"github.com/Jagtech-Services/go-tari-netmap/internal/storage"
 )
 
 // newTestServerWithWalletHTTP builds a test server with the SEPARATE wallet-node

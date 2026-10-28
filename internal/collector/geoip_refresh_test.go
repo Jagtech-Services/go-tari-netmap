@@ -13,8 +13,8 @@ import (
 
 	"golang.org/x/time/rate"
 
-	"github.com/Snipa22/go-tari-netmap/internal/geoip"
-	"github.com/Snipa22/go-tari-netmap/internal/storage"
+	"github.com/Jagtech-Services/go-tari-netmap/internal/geoip"
+	"github.com/Jagtech-Services/go-tari-netmap/internal/storage"
 )
 
 // TestStaleGeoIPsPolicy exercises staleGeoIPs' pure TTL logic directly —

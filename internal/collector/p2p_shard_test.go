@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Snipa22/go-tari-lib/p2p"
+	"github.com/Jagtech-Services/go-tari-lib/v3/p2p"
 )
 
 // TestP2PShardIndexDeterministic verifies that P2PShardIndex is stable/deterministic: the same

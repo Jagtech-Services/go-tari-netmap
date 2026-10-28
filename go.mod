@@ -1,12 +1,12 @@
-module github.com/Snipa22/go-tari-netmap
+module github.com/Jagtech-Services/go-tari-netmap
 
 go 1.24.0
 
 toolchain go1.24.13
 
 require (
-	github.com/Snipa22/go-tari-grpc-lib/v3 v3.2.0
-	github.com/Snipa22/go-tari-lib v1.3.1-0.20260910185719-533910701142
+	github.com/Jagtech-Services/go-tari-grpc-lib/v3 v3.5.0
+	github.com/Jagtech-Services/go-tari-lib/v3 v3.1.0
 	github.com/flynn/noise v1.1.0
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.6.0

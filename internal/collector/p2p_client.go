@@ -7,9 +7,9 @@ import (
 	"log"
 	"time"
 
-	"github.com/Snipa22/go-tari-lib/p2p"
-	pb "github.com/Snipa22/go-tari-lib/p2p/proto"
-	rpcpkg "github.com/Snipa22/go-tari-lib/p2p/rpc"
+	"github.com/Jagtech-Services/go-tari-lib/v3/p2p"
+	pb "github.com/Jagtech-Services/go-tari-lib/v3/p2p/proto"
+	rpcpkg "github.com/Jagtech-Services/go-tari-lib/v3/p2p/rpc"
 )
 
 // P2PShardIndex returns which shard (in [0, shardCount)) addr routes to, via a stable FNV-1a

@@ -1,9 +1,9 @@
 filippo.io/edwards25519 v1.1.0 h1:FNf4tywRC1HmFuKW5xopWpigGjJKiJSV0Cqo0cJWDaA=
 filippo.io/edwards25519 v1.1.0/go.mod h1:BxyFTGdWcka3PhytdK4V28tE5sGfRvvvRV7EaN4VDT4=
-github.com/Snipa22/go-tari-grpc-lib/v3 v3.2.0 h1:cuXLsW2tfvdMGDbu/mwjGvgcEAEO086908n05rW5RPE=
-github.com/Snipa22/go-tari-grpc-lib/v3 v3.2.0/go.mod h1:PhFhxISrJsqnix9QDy16YuxpbpPEcQzFkixNtJftSx8=
-github.com/Snipa22/go-tari-lib v1.3.1-0.20260910185719-533910701142 h1:UVucc2uWB4C50gp+YqdFg/IXZV5oZ5eFZM+pxA8ZqPg=
-github.com/Snipa22/go-tari-lib v1.3.1-0.20260910185719-533910701142/go.mod h1:x9BnwC1bf2dnAVHMHeuR/ieMjVFKdAkohCc6LH2M2N8=
+github.com/Jagtech-Services/go-tari-grpc-lib/v3 v3.5.0 h1:Ee0Xvlt1ZZxqwbfNnmVvUKY1D1JzHsu5sXwjVHh3bRk=
+github.com/Jagtech-Services/go-tari-grpc-lib/v3 v3.5.0/go.mod h1:u10EGCEfaamBMoCegJCf8VX2OIQYBoWTjTqRXwR0AtU=
+github.com/Jagtech-Services/go-tari-lib/v3 v3.1.0 h1:nPnAb8qCA85leFHTzp/cGZAnho6ZTY2peO7zVZwUjgQ=
+github.com/Jagtech-Services/go-tari-lib/v3 v3.1.0/go.mod h1:KE4oFYazbP4Ralwsoxn/qXn3QwrInaThIZ8yo07Hzn0=
 github.com/beorn7/perks v1.0.1 h1:VlbKKnNfV8bJzeqoa4cOKqO6bYr3WgKZxO8Z16+hsOM=
 github.com/beorn7/perks v1.0.1/go.mod h1:G2ZrVWU2WbWT9wwq4/hrbKbnv/1ERSJQ0ibhJ6rlkpw=
 github.com/cespare/xxhash/v2 v2.3.0 h1:UL815xU9SqsFlibzuggzjXhog7bL6oX9BbNZnL2UFvs=
