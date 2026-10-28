@@ -1,5 +1,5 @@
 // Package netaddr holds shared IP-classification logic with no dependency on
-// any other github.com/Snipa22/go-tari-netmap package. It exists purely to
+// any other github.com/Jagtech-Services/go-tari-netmap package. It exists purely to
 // avoid an import cycle: internal/api already imports internal/collector
 // (for collector.NodeClient/collector.ParsePeerAddress/collector.PollOnce),
 // so internal/collector cannot import internal/api back. Both packages need

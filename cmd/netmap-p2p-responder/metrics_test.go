@@ -15,10 +15,10 @@ import (
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	dto "github.com/prometheus/client_model/go"
 
-	"github.com/Snipa22/go-tari-lib/p2p"
-	rpcpkg "github.com/Snipa22/go-tari-lib/p2p/rpc"
+	"github.com/Jagtech-Services/go-tari-lib/v3/p2p"
+	rpcpkg "github.com/Jagtech-Services/go-tari-lib/v3/p2p/rpc"
 
-	"github.com/Snipa22/go-tari-netmap/internal/storage"
+	"github.com/Jagtech-Services/go-tari-netmap/internal/storage"
 )
 
 // TestValidateNetwork exercises the required -network flag's fail-fast validation (see
@@ -320,14 +320,26 @@ func TestOnPeerIdentityRecordsDBWriteFailureMetric(t *testing.T) {
 	}
 }
 
-// TestServeWiresObservabilityCallbacksOverLoopback is this package's version of BRIEF4.md's
-// "reuse this repo's existing p2p.Serve-over-loopback test pattern... dial with a fake client,
-// assert the metric moved" testing requirement: it runs a REAL p2p.Serve loop configured with
-// this binary's exact observability callbacks (mirroring main.go's cfg wiring, now bound to a
-// single test-local *responderMetrics rather than package-level vars) on a loopback listener,
-// dials it with go-tari-lib's own probe clients, and asserts every metric these callbacks feed
-// actually moved.
-func TestServeWiresObservabilityCallbacksOverLoopback(t *testing.T) {
+// TestServeWiresPeerListAndIdentityOverLoopback runs a REAL p2p.Serve loop configured with
+// this binary's actual production ResponderConfig wiring (mirroring main.go's cfg exactly) on a
+// loopback listener, and dials it with go-tari-lib's own probe clients to prove the responder
+// still functions end to end: a get_peers round trip succeeds (PeerListProvider), and an
+// unsupported-protocol probe is still correctly declined.
+//
+// This test previously ALSO asserted that dialing moved five Prometheus metrics
+// (connections_accepted_total, handshake_result_total, identity_exchange_result_total,
+// get_peers_served_total, substream_protocol_declined_total), via
+// ResponderConfig.OnConnectionAccepted/OnHandshakeResult/OnIdentityExchangeResult/
+// OnGetPeersServed/OnSubstreamProtocolDeclined. Those fields do NOT exist on go-tari-lib/v3's
+// actually-tagged v3.1.0 p2p.ResponderConfig -- they only ever existed on go-tari-lib's
+// feat/db-backed-peer-list branch (commit 5339107), which was never merged into main and never
+// released. See main.go's ResponderConfig construction site for the full explanation. Those
+// five metric assertions have been removed from this test along with the fields that drove
+// them -- this is a genuine upstream capability loss surfaced by this migration, not a test
+// simplification of convenience. metrics.onConnectionAccepted etc. remain covered by their own
+// direct unit tests above (TestOnConnectionAcceptedIncrementsMetric etc.), which still validate
+// the increment logic itself even though nothing in production can reach it anymore.
+func TestServeWiresPeerListAndIdentityOverLoopback(t *testing.T) {
 	store := newTestStore(t)
 	metrics := mustTestResponderMetrics(t)
 	responder := &dbBackedResponder{store: store, logf: t.Logf, metrics: metrics}
@@ -344,23 +356,12 @@ func TestServeWiresObservabilityCallbacksOverLoopback(t *testing.T) {
 	}
 
 	cfg := p2p.ResponderConfig{
-		StaticKeypair:               staticKeypair,
-		OurFeatures:                 p2p.FeaturesCommunicationNode,
-		PeerListProvider:            responder.peerListProvider,
-		OnPeerIdentity:              responder.onPeerIdentity,
-		Logf:                        t.Logf,
-		OnConnectionAccepted:        metrics.onConnectionAccepted,
-		OnHandshakeResult:           metrics.onHandshakeResult,
-		OnIdentityExchangeResult:    metrics.onIdentityExchangeResult,
-		OnGetPeersServed:            metrics.onGetPeersServed,
-		OnSubstreamProtocolDeclined: metrics.onSubstreamProtocolDeclined,
+		StaticKeypair:    staticKeypair,
+		OurFeatures:      p2p.FeaturesCommunicationNode,
+		PeerListProvider: responder.peerListProvider,
+		OnPeerIdentity:   responder.onPeerIdentity,
+		Logf:             t.Logf,
 	}
-
-	beforeAccepted := testutil.ToFloat64(metrics.connectionsAccepted)
-	beforeHandshakeSuccess := testutil.ToFloat64(metrics.handshakeResult.WithLabelValues("success"))
-	beforeIdentitySuccess := testutil.ToFloat64(metrics.identityExchangeResult.WithLabelValues("success"))
-	beforeGetPeersServed := testutil.ToFloat64(metrics.getPeersServed)
-	beforeDeclined := testutil.ToFloat64(metrics.substreamProtocolDeclined.WithLabelValues(string(rpcpkg.BlockSyncProtocolID)))
 
 	serveCtx, serveCancel := context.WithCancel(context.Background())
 	serveErrCh := make(chan error, 1)
@@ -378,40 +379,16 @@ func TestServeWiresObservabilityCallbacksOverLoopback(t *testing.T) {
 
 	// Connection 1: a real get_peers round trip -- exercises accept, handshake success,
 	// identity exchange success, and a served (empty, since no confirmed/reachable nodes
-	// exist yet) get_peers response.
+	// exist yet) get_peers response, end to end.
 	if _, err := p2p.ProbeGetPeersWithOptions(ctx, listener.Addr().String(), rpcpkg.GetPeersRequest{N: 50}, p2p.ProbeOptions{}); err != nil {
 		t.Fatalf("ProbeGetPeersWithOptions: %v", err)
 	}
 
 	// Connection 2: ProbeChainMetadataWithOptions negotiates t/blksync/1 -- a protocol this
-	// responder does NOT support (it only serves t/dht/1, see responder.go/main.go) -- so this
-	// exercises OnSubstreamProtocolDeclined without needing any unexported go-tari-lib helper.
+	// responder does NOT support (it only serves t/dht/1, see responder.go/main.go) -- this
+	// must still fail even though we can no longer count it via OnSubstreamProtocolDeclined.
 	if _, err := p2p.ProbeChainMetadataWithOptions(ctx, listener.Addr().String(), p2p.ProbeOptions{}); err == nil {
 		t.Fatalf("expected ProbeChainMetadataWithOptions to fail against a responder that only supports t/dht/1")
-	}
-
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		if testutil.ToFloat64(metrics.substreamProtocolDeclined.WithLabelValues(string(rpcpkg.BlockSyncProtocolID))) > beforeDeclined || time.Now().After(deadline) {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-
-	if got := testutil.ToFloat64(metrics.connectionsAccepted); got != beforeAccepted+2 {
-		t.Errorf("connections_accepted_total = %v, want %v", got, beforeAccepted+2)
-	}
-	if got := testutil.ToFloat64(metrics.handshakeResult.WithLabelValues("success")); got != beforeHandshakeSuccess+2 {
-		t.Errorf("handshake_result_total{result=success} = %v, want %v", got, beforeHandshakeSuccess+2)
-	}
-	if got := testutil.ToFloat64(metrics.identityExchangeResult.WithLabelValues("success")); got != beforeIdentitySuccess+2 {
-		t.Errorf("identity_exchange_result_total{result=success} = %v, want %v", got, beforeIdentitySuccess+2)
-	}
-	if got := testutil.ToFloat64(metrics.getPeersServed); got != beforeGetPeersServed+1 {
-		t.Errorf("get_peers_served_total = %v, want %v (only connection 1 completed get_peers)", got, beforeGetPeersServed+1)
-	}
-	if got := testutil.ToFloat64(metrics.substreamProtocolDeclined.WithLabelValues(string(rpcpkg.BlockSyncProtocolID))); got != beforeDeclined+1 {
-		t.Errorf("substream_protocol_declined_total{protocol=%q} = %v, want %v", rpcpkg.BlockSyncProtocolID, got, beforeDeclined+1)
 	}
 }
 

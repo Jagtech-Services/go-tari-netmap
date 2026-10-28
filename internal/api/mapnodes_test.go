@@ -3,7 +3,7 @@ package api
 import (
 	"testing"
 
-	"github.com/Snipa22/go-tari-netmap/internal/storage"
+	"github.com/Jagtech-Services/go-tari-netmap/internal/storage"
 )
 
 // TestIsMapEligible covers BRIEF.md's exact /map population predicate:

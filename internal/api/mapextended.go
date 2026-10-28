@@ -9,8 +9,8 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/Snipa22/go-tari-netmap/internal/collector"
-	"github.com/Snipa22/go-tari-netmap/internal/storage"
+	"github.com/Jagtech-Services/go-tari-netmap/internal/collector"
+	"github.com/Jagtech-Services/go-tari-netmap/internal/storage"
 )
 
 // ExtendedMapResponse is the GET /nodes/map/extended response body (see

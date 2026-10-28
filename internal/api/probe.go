@@ -6,8 +6,8 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/Snipa22/go-tari-netmap/internal/collector"
-	"github.com/Snipa22/go-tari-netmap/internal/storage"
+	"github.com/Jagtech-Services/go-tari-netmap/internal/collector"
+	"github.com/Jagtech-Services/go-tari-netmap/internal/storage"
 )
 
 // probeSubmission runs a best-effort, non-blocking connectivity check

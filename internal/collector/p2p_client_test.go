@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Snipa22/go-tari-lib/p2p"
-	pb "github.com/Snipa22/go-tari-lib/p2p/proto"
-	rpcpkg "github.com/Snipa22/go-tari-lib/p2p/rpc"
+	"github.com/Jagtech-Services/go-tari-lib/v3/p2p"
+	pb "github.com/Jagtech-Services/go-tari-lib/v3/p2p/proto"
+	rpcpkg "github.com/Jagtech-Services/go-tari-lib/v3/p2p/rpc"
 )
 
 // fakeP2PProbeFuncs is a fixture p2pProbeFuncs implementation used to

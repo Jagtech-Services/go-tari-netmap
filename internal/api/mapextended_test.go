@@ -11,7 +11,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/Snipa22/go-tari-netmap/internal/storage"
+	"github.com/Jagtech-Services/go-tari-netmap/internal/storage"
 )
 
 // extendedMapResponseForTest mirrors mapextended.go's unexported

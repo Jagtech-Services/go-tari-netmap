@@ -5,9 +5,9 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/Snipa22/go-tari-netmap/internal/collector"
-	"github.com/Snipa22/go-tari-netmap/internal/netaddr"
-	"github.com/Snipa22/go-tari-netmap/internal/storage"
+	"github.com/Jagtech-Services/go-tari-netmap/internal/collector"
+	"github.com/Jagtech-Services/go-tari-netmap/internal/netaddr"
+	"github.com/Jagtech-Services/go-tari-netmap/internal/storage"
 )
 
 // MapNode is one entry of the GET /nodes/map response body: a

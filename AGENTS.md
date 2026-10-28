@@ -9,7 +9,7 @@ Instructions for AI coding agents (OpenCode, Claude Code, or any `agents.md`-com
 ## Project
 
 - **What this repo is:** Tari network peer-topology + node-health mapping tool. Polls Tari nodes, walks the peer graph via seed-node discovery, and surfaces topology + node-health data for mining-pool operators picking peers.
-- **Module path:** `github.com/Snipa22/go-tari-netmap`
+- **Module path:** `github.com/Jagtech-Services/go-tari-netmap`
 - **Depends on:** `go-tari-grpc-lib` (GRPC wrapper), `core-go-lib` (shared utilities, if useful)
 
 ## Commands

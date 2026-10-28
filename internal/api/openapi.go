@@ -9,7 +9,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/Snipa22/go-tari-netmap/internal/docs"
+	"github.com/Jagtech-Services/go-tari-netmap/internal/docs"
 )
 
 //go:embed templates/*.html

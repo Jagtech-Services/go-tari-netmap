@@ -9,8 +9,8 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/Snipa22/go-tari-netmap/internal/netaddr"
-	"github.com/Snipa22/go-tari-netmap/internal/storage"
+	"github.com/Jagtech-Services/go-tari-netmap/internal/netaddr"
+	"github.com/Jagtech-Services/go-tari-netmap/internal/storage"
 )
 
 // RefreshGeoIP opportunistically tops up storage's geoip_cache table for

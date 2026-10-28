@@ -92,9 +92,9 @@ import (
 
 	"github.com/flynn/noise"
 
-	"github.com/Snipa22/go-tari-lib/p2p"
+	"github.com/Jagtech-Services/go-tari-lib/v3/p2p"
 
-	"github.com/Snipa22/go-tari-netmap/internal/remotestore"
+	"github.com/Jagtech-Services/go-tari-netmap/internal/remotestore"
 )
 
 func main() {
@@ -282,18 +282,27 @@ func run() error {
 
 	responder := &dbBackedResponder{store: store, logf: log.Printf, metrics: metrics}
 
+	// NOTE: go-tari-lib/v3 v3.1.0 (the tagged release this repo pins post-migration) does
+	// NOT have OnConnectionAccepted/OnHandshakeResult/OnIdentityExchangeResult/
+	// OnGetPeersServed/OnSubstreamProtocolDeclined on p2p.ResponderConfig at all -- those
+	// hooks only ever existed on go-tari-lib's feat/db-backed-peer-list branch (commit
+	// 5339107, "add observability callbacks to ResponderConfig"), which was never merged
+	// into go-tari-lib's main and never released/tagged. metrics.onConnectionAccepted etc.
+	// (metrics.go) and their matching netmap_<network>_p2p_responder_{connections_accepted,
+	// handshake_result,identity_exchange_result,get_peers_served,get_peers_peer_count,
+	// substream_protocol_declined}_total/_bucket series therefore can no longer be
+	// incremented by this binary and will always read zero -- they remain registered (so
+	// /metrics and existing dashboards don't break) pending go-tari-lib merging and tagging
+	// a release of that branch. This is a genuine upstream capability loss surfaced by this
+	// migration, not an intentional feature removal -- flag it back if these metrics are
+	// relied on operationally.
 	cfg := p2p.ResponderConfig{
-		StaticKeypair:               staticKeypair,
-		OurFeatures:                 p2p.FeaturesCommunicationNode,
-		OurAddresses:                ourAddresses,
-		PeerListProvider:            responder.peerListProvider,
-		OnPeerIdentity:              responder.onPeerIdentity,
-		Logf:                        log.Printf,
-		OnConnectionAccepted:        metrics.onConnectionAccepted,
-		OnHandshakeResult:           metrics.onHandshakeResult,
-		OnIdentityExchangeResult:    metrics.onIdentityExchangeResult,
-		OnGetPeersServed:            metrics.onGetPeersServed,
-		OnSubstreamProtocolDeclined: metrics.onSubstreamProtocolDeclined,
+		StaticKeypair:    staticKeypair,
+		OurFeatures:      p2p.FeaturesCommunicationNode,
+		OurAddresses:     ourAddresses,
+		PeerListProvider: responder.peerListProvider,
+		OnPeerIdentity:   responder.onPeerIdentity,
+		Logf:             log.Printf,
 	}
 
 	err = p2p.Serve(ctx, listener, cfg)

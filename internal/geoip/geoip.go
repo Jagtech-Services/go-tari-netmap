@@ -5,7 +5,7 @@
 // "Explicit non-goals" section) -- no MaxMind/paid-provider integration.
 //
 // This package has no dependency on any other
-// github.com/Snipa22/go-tari-netmap package (it doesn't even know what a
+// github.com/Jagtech-Services/go-tari-netmap package (it doesn't even know what a
 // storage.Node is) -- it is a pure network client, deliberately kept as
 // a leaf package. internal/collector owns the cache-read-through/TTL
 // policy and calls into this package only for the actual outbound HTTP

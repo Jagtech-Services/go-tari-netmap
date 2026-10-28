@@ -3,7 +3,7 @@ package main
 import (
 	"testing"
 
-	"github.com/Snipa22/go-tari-netmap/internal/remotestore"
+	"github.com/Jagtech-Services/go-tari-netmap/internal/remotestore"
 )
 
 func TestSelfAdvertisedAddressesIP4TCP(t *testing.T) {

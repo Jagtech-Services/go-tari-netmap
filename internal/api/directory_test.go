@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Snipa22/go-tari-netmap/internal/storage"
+	"github.com/Jagtech-Services/go-tari-netmap/internal/storage"
 )
 
 // directoryResponseForTest mirrors directory.go's unexported
