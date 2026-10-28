@@ -11,7 +11,7 @@ info:
   version: "1.0.0"
   contact:
     name: go-tari-netmap
-    url: https://github.com/Snipa22/go-tari-netmap
+    url: https://github.com/Jagtech-Services/go-tari-netmap
 servers:
   - url: https://netmap.supportxtm.com
     description: Production deployment (Caddy-proxied)
