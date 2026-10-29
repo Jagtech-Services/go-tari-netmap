@@ -20,9 +20,12 @@ import (
 //
 // It uses its own context.Background()-derived timeout rather than the
 // originating HTTP request's context: that request's context is
-// canceled once the response is written, but this probe is launched via
-// `go probeSubmission(...)` specifically so it keeps running after the
-// response has already returned to the caller.
+// canceled once the response is written, but this probe is submitted to
+// handleCreateNode's shared, bounded probePool (see asyncpool.go)
+// specifically so it keeps running after the response has already
+// returned to the caller -- bounded rather than a bare, unbounded `go
+// probeSubmission(...)` so a flood of submissions can't spawn unbounded
+// probe goroutines/DB connections.
 func probeSubmission(store storage.Store, grpcClient, p2pClient collector.NodeClient, id uuid.UUID, address string) {
 	ctx, cancel := context.WithTimeout(context.Background(), asyncCheckTimeout)
 	defer cancel()

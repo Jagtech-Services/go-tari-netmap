@@ -58,7 +58,7 @@ type createWalletNodeSubmissionRequest struct {
 // Reuses the SAME limiter/lockouts instances POST /nodes already uses (see NewRouter) --
 // deliberately not a second, independently-configured rate limiter for a
 // similar-risk-profile public write route.
-func handleCreateWalletNodeSubmission(store storage.Store, walletHTTPClient collector.NodeClient, limiter *ipRateLimiter, lockouts *invalidSubmissionTracker) http.HandlerFunc {
+func handleCreateWalletNodeSubmission(store storage.Store, walletHTTPClient collector.NodeClient, limiter *ipRateLimiter, lockouts *invalidSubmissionTracker, probePool *asyncProbePool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req createWalletNodeSubmissionRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -126,11 +126,17 @@ func handleCreateWalletNodeSubmission(store storage.Store, walletHTTPClient coll
 			return
 		}
 
-		// (4) Best-effort, non-blocking, informational-only probe -- launched via `go`
-		// and never awaited, mirroring probeSubmission's exact pattern (own
-		// context.Background()-derived timeout, since r.Context() is canceled once this
+		// (4) Best-effort, non-blocking, informational-only probe -- submitted to the
+		// shared, bounded probePool (see asyncpool.go) rather than a bare `go`, mirroring
+		// probeSubmission's call site in handleCreateNode: this endpoint is public and
+		// unauthenticated once wallet-http-enabled is set, so a repeated-submission
+		// flood (e.g. a scanner/bot hitting it right after a restart) must never be able
+		// to spawn unbounded probe goroutines/outbound dials/DB connections -- own
+		// context.Background()-derived timeout (since r.Context() is canceled once this
 		// handler returns). NOT the enforcement gate -- see handleApproveWalletSubmission.
-		go probeWalletSubmission(store, walletHTTPClient, submission.ID, req.Host, walletHTTPPort)
+		probePool.Submit(func() {
+			probeWalletSubmission(store, walletHTTPClient, submission.ID, req.Host, walletHTTPPort)
+		})
 
 		writeJSON(w, http.StatusAccepted, submission)
 	}
