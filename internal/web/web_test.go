@@ -135,7 +135,7 @@ func newTestServer(t *testing.T, store storage.Store) *httptest.Server {
 // newTestServerWithWalletHTTPEnabled below for the dedicated disabled-state test.
 func newTestServerWithCreds(t *testing.T, store storage.Store, creds adminauth.Credentials) *httptest.Server {
 	t.Helper()
-	handler, err := web.NewHandler(store, creds, web.DefaultDashboardCountsCacheTTL, true)
+	handler, err := web.NewHandler(t.Context(), store, creds, web.DefaultDashboardCountsCacheTTL, true)
 	if err != nil {
 		t.Fatalf("build web handler: %v", err)
 	}
@@ -149,7 +149,7 @@ func newTestServerWithCreds(t *testing.T, store storage.Store, creds adminauth.C
 // (every other test wants the true default newTestServer already provides).
 func newTestServerWithWalletHTTPEnabled(t *testing.T, store storage.Store, walletHTTPEnabled bool) *httptest.Server {
 	t.Helper()
-	handler, err := web.NewHandler(store, adminauth.Credentials{Username: testAdminUser, Password: testAdminPassword}, web.DefaultDashboardCountsCacheTTL, walletHTTPEnabled)
+	handler, err := web.NewHandler(t.Context(), store, adminauth.Credentials{Username: testAdminUser, Password: testAdminPassword}, web.DefaultDashboardCountsCacheTTL, walletHTTPEnabled)
 	if err != nil {
 		t.Fatalf("build web handler: %v", err)
 	}
@@ -165,7 +165,7 @@ func newTestServerWithWalletHTTPEnabled(t *testing.T, store storage.Store, walle
 // specifically exercise the cache's own timing/sharing behavior.
 func newTestServerWithCountsCacheTTL(t *testing.T, store storage.Store, ttl time.Duration) *httptest.Server {
 	t.Helper()
-	handler, err := web.NewHandler(store, adminauth.Credentials{Username: testAdminUser, Password: testAdminPassword}, ttl, true)
+	handler, err := web.NewHandler(t.Context(), store, adminauth.Credentials{Username: testAdminUser, Password: testAdminPassword}, ttl, true)
 	if err != nil {
 		t.Fatalf("build web handler: %v", err)
 	}

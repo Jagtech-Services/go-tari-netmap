@@ -15,7 +15,6 @@ import (
 	"net"
 	"net/http"
 	"strconv"
-	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -393,105 +392,77 @@ func computeLikelyDead(history []storage.HealthCheck) bool {
 	return storage.IsLikelyDead(history)
 }
 
-// DefaultDashboardCountsCacheTTL is the default TTL dashboardCountsCache
-// is built with when the caller doesn't override it — 20s, matching
-// internal/api's DefaultStatsCacheTTL (see PR #48's GET /v1/stats
-// cache) for consistency: both caches bound the exact same underlying
-// whole-population ListNodes/ListNodeAddressesForNodes query cost, just
-// for different consumers (the JSON GET /v1/stats endpoint there, the
-// HTML GET / and GET /network dashboard routes here).
+// DefaultDashboardCountsCacheTTL is the default refresh interval
+// dashboardCountsCache is built with when the caller doesn't override
+// it — 60s, matching internal/api's DefaultStatsCacheTTL (per Alex's
+// explicit direction to bring every whole-population cache in this
+// codebase to the same 60s background-refresh interval — see that
+// constant's doc comment for the full prod-incident rationale: both
+// caches bound the exact same underlying whole-population
+// ListNodes/ListNodeAddressesForNodes query cost, just for different
+// consumers (the JSON GET /v1/stats endpoint there, the HTML GET / and
+// GET /network dashboard routes here).
 // cmd/netmap's -dashboard-cache-ttl flag defaults to this exact value.
-const DefaultDashboardCountsCacheTTL = 20 * time.Second
+const DefaultDashboardCountsCacheTTL = 60 * time.Second
 
-// dashboardCountsCache is a small in-process TTL cache for the
-// whole-population dashboardCounts plus the addrsByNode map that feeds
-// both it and every node table row's privacy-scrubbed capability
-// fields (see buildNodeTableData) — the single unfiltered
-// store.ListNodes(ctx, storage.NodeFilter{}) + ListNodeAddressesForNodes
-// round trip that GET / (handleDashboard) and GET /network
-// (handleFullNetwork) both compute today, unpaginated and identical
-// regardless of which route triggered it. It also caches
-// store.NetworkHeight's result (height + node count) alongside those
-// counts, sharing this same entry/TTL/mutex rather than a second,
-// independent cache — see networkHeight/networkHeightNodeCount fields
-// below. Both handleDashboard and handleFullNetwork call
-// store.NetworkHeight every request (see their own doc comments); prior
-// to this, that call was NOT covered by this cache at all (unlike
-// internal/api's GET /v1/stats' statsCache, which has always wrapped
-// FetchNodeCounts and NetworkHeight together), so repeated GET //GET
-// /network requests within the TTL window saw no speedup on this call
-// even though the counts fetch was already being served from cache.
-//
-// One instance is created per NewHandler call (i.e. once per process,
-// at router construction time) and passed to BOTH handleDashboard and
-// handleFullNetwork — this is deliberately ONE shared cache entry, not
-// two: a cache hit on GET / populates it for a subsequent GET /network
-// within the same TTL window, and vice versa, since both routes would
-// otherwise recompute the exact same queries.
-//
-// Guarded by a sync.RWMutex, mirroring internal/api/stats.go's
-// statsCache (see PR #48) for consistency rather than inventing a
-// second in-process caching pattern in this codebase.
-//
-// Accepted tradeoff (deliberately NOT implemented), same as
-// statsCache: concurrent cache-miss requests are not deduplicated
-// ("singleflight"-style) — two requests that both miss at the same
-// moment will both recompute and both re-store the result. Acceptable
-// given this query's low cost relative to request volume and
-// read-mostly access pattern; see statsCache's doc comment for the
-// full reasoning, which applies identically here.
-type dashboardCountsCache struct {
-	ttl time.Duration
-
-	mu                     sync.RWMutex
+// dashboardCountsSnapshot bundles everything dashboardCountsCache's
+// background goroutine recomputes in one round trip: the
+// whole-population dashboardCounts, the addrsByNode map that feeds both
+// it and every node table row's privacy-scrubbed capability fields (see
+// buildNodeTableData), and store.NetworkHeight's result (height + node
+// count) — all three come from the exact same cache entry/refresh cycle
+// rather than three independent ones, since GET / and GET /network both
+// need all three together on every request.
+type dashboardCountsSnapshot struct {
 	counts                 dashboardCounts
 	addrsByNode            map[uuid.UUID][]storage.NodeAddress
 	networkHeight          *int64
 	networkHeightNodeCount int
-	computedAt             time.Time
-	valid                  bool
 }
 
-// get returns the cached whole-population counts, addrsByNode map, and
-// NetworkHeight result (height + node count), and true, if the cache
-// holds a value computed within the last ttl; otherwise it returns the
-// zero value and false (cache miss/expiry — the caller must recompute
-// and call set).
-func (c *dashboardCountsCache) get() (dashboardCounts, map[uuid.UUID][]storage.NodeAddress, *int64, int, bool) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	if !c.valid || time.Since(c.computedAt) >= c.ttl {
-		return dashboardCounts{}, nil, nil, 0, false
-	}
-	return c.counts, c.addrsByNode, c.networkHeight, c.networkHeightNodeCount, true
-}
-
-// set stores counts/addrsByNode/networkHeight/networkHeightNodeCount as
-// the new cached value, stamped with the current time — the starting
-// point for the next get's TTL check.
-func (c *dashboardCountsCache) set(counts dashboardCounts, addrsByNode map[uuid.UUID][]storage.NodeAddress, networkHeight *int64, networkHeightNodeCount int) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.counts = counts
-	c.addrsByNode = addrsByNode
-	c.networkHeight = networkHeight
-	c.networkHeightNodeCount = networkHeightNodeCount
-	c.computedAt = time.Now()
-	c.valid = true
-}
+// dashboardCountsCache is a background-refresh cache (see
+// api.BackgroundCache) for the whole-population dashboardCounts +
+// addrsByNode + NetworkHeight round trip that GET / (handleDashboard)
+// and GET /network (handleFullNetwork) both need, unpaginated and
+// identical regardless of which route triggered it. A single
+// long-lived goroutine (started in NewHandler) owns recomputing this on
+// its own ticker; buildNodeTableData below only ever reads the last-
+// computed value via Get, never recomputes on the request path.
+//
+// One instance is created per NewHandler call (i.e. once per process)
+// and passed to BOTH handleDashboard and handleFullNetwork — this is
+// deliberately ONE shared cache, not two: both routes read the exact
+// same background-refreshed snapshot, since they'd otherwise be asking
+// for the exact same queries' results twice over.
+//
+// Real prod incident this -- and internal/api's identically-shaped
+// statsCache/extendedMapCache -- fixes (see
+// internal/api.DefaultStatsCacheTTL's doc comment for the full
+// SIGQUIT-goroutine-dump evidence): the OLD on-demand, recompute-on-
+// cache-miss version of this cache's "accepted tradeoff" of not
+// deduplicating concurrent misses was wrong at prod's 115k+-node
+// population size -- every process restart (cache cold) plus real
+// polling traffic could let several concurrent GET //GET /network
+// requests each independently run the full whole-population query and
+// each hold their own huge result set in memory at once. A
+// background-refresh cache makes that structurally impossible: there's
+// only ever one in-flight compute, run by the background goroutine,
+// never by an HTTP request.
+type dashboardCountsCache = api.BackgroundCache[dashboardCountsSnapshot]
 
 // computeWholePopulationCounts performs the actual whole-population
 // ListNodes/ListNodeAddressesForNodes/CountNodes round trip that
-// dashboardCountsCache wraps — called only on a cache miss/expiry (see
-// buildNodeTableData below). Unchanged from what this package always
-// did inline before the cache was added: same queries, same
-// ComputeNodeCounts computation, same Confirmed24h CountNodes call.
-// Returns addrsByNode too since buildNodeTableData's per-row rendering
-// needs it for whichever nodes end up in the current page — its keys
-// are a superset of every possible page's node IDs, so it's cached and
-// reused across both the whole-population counts pass and every
-// paginated request within the TTL window, never reintroducing a
-// per-node ListNodeAddresses N+1.
+// dashboardCountsCache wraps — called only by that cache's own
+// background refresh goroutine (see NewHandler's dashboardCountsCache
+// construction), never directly by a request handler. Unchanged from
+// what this package always did inline before the cache was added: same
+// queries, same ComputeNodeCounts computation, same Confirmed24h
+// CountNodes call. Returns addrsByNode too since buildNodeTableData's
+// per-row rendering needs it for whichever nodes end up in the current
+// page — its keys are a superset of every possible page's node IDs, so
+// it's cached and reused across both the whole-population counts pass
+// and every paginated request within the TTL window, never
+// reintroducing a per-node ListNodeAddresses N+1.
 func computeWholePopulationCounts(ctx context.Context, store storage.Store) (dashboardCounts, map[uuid.UUID][]storage.NodeAddress, error) {
 	var counts dashboardCounts
 
@@ -570,31 +541,22 @@ func computeWholePopulationCounts(ctx context.Context, store storage.Store) (das
 // shape, differing only in the ReachableSince filter and historyLimit
 // each passes in.
 //
-// The whole-population counts/addrsByNode/NetworkHeight fetch
-// (computeWholePopulationCounts + store.NetworkHeight) is served from
-// cache when possible — see dashboardCountsCache's doc comment —
-// falling back to a fresh fetch (which populates the cache for
-// subsequent callers, including the OTHER route sharing this same
-// cache instance) on a miss/expiry. On a cache hit, store.NetworkHeight
-// is skipped entirely, same as ListNodes/ListNodeAddressesForNodes. The
-// paginated LIMIT/OFFSET row fetch below is completely untouched by
-// this cache either way.
+// The whole-population counts/addrsByNode/NetworkHeight snapshot is
+// served from the background-refresh dashboardCountsCache (see its doc
+// comment) via cache.Get(ctx) — this function never recomputes it
+// itself; a single background goroutine (started in NewHandler) owns
+// that. The paginated LIMIT/OFFSET row fetch below is completely
+// separate from this cache either way, and still runs on every
+// request.
 func buildNodeTableData(ctx context.Context, store storage.Store, cache *dashboardCountsCache, reachableSince *time.Time, page, limit, offset, historyLimit int) (dashboardCounts, []dashboardNodeRow, nodeTablePagination, *int64, int, error) {
 	var pagination nodeTablePagination
 
-	counts, addrsByNode, networkHeight, networkHeightNodeCount, ok := cache.get()
-	if !ok {
-		var err error
-		counts, addrsByNode, err = computeWholePopulationCounts(ctx, store)
-		if err != nil {
-			return counts, nil, pagination, nil, 0, err
-		}
-		networkHeight, networkHeightNodeCount, err = store.NetworkHeight(ctx)
-		if err != nil {
-			return counts, nil, pagination, nil, 0, err
-		}
-		cache.set(counts, addrsByNode, networkHeight, networkHeightNodeCount)
+	snapshot, err := cache.Get(ctx)
+	if err != nil {
+		return dashboardCounts{}, nil, pagination, nil, 0, err
 	}
+	counts, addrsByNode, networkHeight, networkHeightNodeCount :=
+		snapshot.counts, snapshot.addrsByNode, snapshot.networkHeight, snapshot.networkHeightNodeCount
 
 	// Paginated: the actual SQL-level LIMIT/OFFSET query backing the
 	// node table rows shown on this page, restricted to reachableSince
@@ -701,7 +663,7 @@ func truncateAddress(addr string, maxLen int) string {
 // /admin/submissions review page. adminCreds configures that gate — see
 // internal/adminauth.Wrap's doc comment for the fail-closed-503 behavior
 // when adminCreds isn't fully configured. dashboardCountsCacheTTL
-// configures GET /'s and GET /network's shared in-process
+// configures GET /'s and GET /network's shared background-refresh
 // whole-population counts cache (see dashboardCountsCache/
 // buildNodeTableData/DefaultDashboardCountsCacheTTL) — callers that
 // don't care can pass DefaultDashboardCountsCacheTTL. walletHTTPEnabled
@@ -710,7 +672,16 @@ func truncateAddress(addr string, maxLen int) string {
 // renders (200, not 404 -- this is a read-only dashboard page, not a write endpoint, so
 // there's no abuse-surface reason to hide its existence) but always shows the empty/
 // disabled state (see handleWalletNodes), never querying storage.Store.ListNodes at all.
-func NewHandler(store storage.Store, adminCreds adminauth.Credentials, dashboardCountsCacheTTL time.Duration, walletHTTPEnabled bool) (http.Handler, error) {
+//
+// ctx controls the lifetime of the background-refresh goroutine this
+// function starts for countsCache (via api.BackgroundCache -- see
+// internal/api/backgroundcache.go): when ctx is done, that goroutine
+// stops refreshing. Callers that have a genuine process-lifetime
+// context already (e.g. cmd/netmap/main.go's
+// signal.NotifyContext-derived ctx) should pass it through here rather
+// than context.Background() -- see api.NewRouter's doc comment for the
+// identical convention on the JSON API side.
+func NewHandler(ctx context.Context, store storage.Store, adminCreds adminauth.Credentials, dashboardCountsCacheTTL time.Duration, walletHTTPEnabled bool) (http.Handler, error) {
 	// derefBool is registered as a template func because Go's
 	// text/template `{{if}}` truth test on a pointer only checks
 	// non-nil-ness, not the pointed-to value — a *bool pointing at
@@ -737,8 +708,26 @@ func NewHandler(store storage.Store, adminCreds adminauth.Credentials, dashboard
 
 	// Shared by handleDashboard and handleFullNetwork — see
 	// dashboardCountsCache's doc comment for why this must be ONE
-	// instance, not one per handler.
-	countsCache := &dashboardCountsCache{ttl: dashboardCountsCacheTTL}
+	// instance, not one per handler. A single background goroutine
+	// (started by api.NewBackgroundCache) owns recomputing this on its
+	// own ttl-interval ticker; both handlers below only ever read the
+	// last-computed snapshot via Get.
+	countsCache := api.NewBackgroundCache(ctx, "dashboard-counts", dashboardCountsCacheTTL, func(ctx context.Context) (dashboardCountsSnapshot, error) {
+		counts, addrsByNode, err := computeWholePopulationCounts(ctx, store)
+		if err != nil {
+			return dashboardCountsSnapshot{}, err
+		}
+		networkHeight, networkHeightNodeCount, err := store.NetworkHeight(ctx)
+		if err != nil {
+			return dashboardCountsSnapshot{}, err
+		}
+		return dashboardCountsSnapshot{
+			counts:                 counts,
+			addrsByNode:            addrsByNode,
+			networkHeight:          networkHeight,
+			networkHeightNodeCount: networkHeightNodeCount,
+		}, nil
+	})
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", handleDashboard(tmpl, store, countsCache))

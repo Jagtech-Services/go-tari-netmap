@@ -243,7 +243,7 @@ func main() {
 		log.Printf("NETMAP_ADMIN_USER/NETMAP_ADMIN_PASSWORD not both set — /admin routes are disabled (503)")
 	}
 
-	webHandler, err := web.NewHandler(store, adminCreds, *dashboardCacheTTL, *walletHTTPEnabled)
+	webHandler, err := web.NewHandler(ctx, store, adminCreds, *dashboardCacheTTL, *walletHTTPEnabled)
 	if err != nil {
 		log.Fatalf("failed to build web handler: %v", err)
 	}
@@ -280,7 +280,7 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.Handle("/", webHandler)
-	mux.Handle("/api/", http.StripPrefix("/api", api.NewRouter(store, grpcClient, p2pClient, walletHTTPClient, *walletHTTPEnabled, adminCreds, collectors, *statsCacheTTL, *directoryCacheTTL, *extendedMapCacheTTL)))
+	mux.Handle("/api/", http.StripPrefix("/api", api.NewRouter(ctx, store, grpcClient, p2pClient, walletHTTPClient, *walletHTTPEnabled, adminCreds, collectors, *statsCacheTTL, *directoryCacheTTL, *extendedMapCacheTTL)))
 
 	// instrumentHTTP wraps the whole dashboard+API mux above with httpRequestsTotal/
 	// httpRequestDuration -- see metrics.go's doc comment. This mux is served on *addr (the

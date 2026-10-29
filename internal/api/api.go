@@ -77,18 +77,35 @@ var MaxPendingSubmissions = 100
 // cmd/netmap/main.go; see wrapCollectorAuth's doc comment for the
 // fail-closed-503 behavior when it's empty/unconfigured, mirroring
 // adminCreds' own fail-closed convention. statsCacheTTL
-// configures GET /v1/stats' in-process response cache (see stats.go's
-// statsCache/handleStats/DefaultStatsCacheTTL) — callers that don't care
-// can pass DefaultStatsCacheTTL. directoryCacheTTL configures GET
-// /v1/directory's own in-process, per-query-param-combination response
-// cache (see directory.go's directoryCache/handleDirectory/
-// DefaultDirectoryCacheTTL) — callers that don't care can pass
-// DefaultDirectoryCacheTTL. extendedMapCacheTTL configures GET
-// /nodes/map/extended's own in-process, whole-response cache (see
-// mapextended.go's extendedMapCache/handleNodesMapExtended/
+// configures GET /v1/stats' background-refresh response cache (see
+// stats.go's statsCache/handleStats/DefaultStatsCacheTTL) — callers
+// that don't care can pass DefaultStatsCacheTTL. directoryCacheTTL
+// configures GET /v1/directory's own in-process, per-query-param-
+// combination response cache (see directory.go's directoryCache/
+// handleDirectory/DefaultDirectoryCacheTTL) — callers that don't care
+// can pass DefaultDirectoryCacheTTL. extendedMapCacheTTL configures GET
+// /nodes/map/extended's own background-refresh, whole-response cache
+// (see mapextended.go's extendedMapCache/handleNodesMapExtended/
 // DefaultExtendedMapCacheTTL) -- callers that don't care can pass
 // DefaultExtendedMapCacheTTL.
-func NewRouter(store storage.Store, grpcClient, p2pClient, walletHTTPClient collector.NodeClient, walletHTTPEnabled bool, adminCreds adminauth.Credentials, collectors map[string]CollectorConfig, statsCacheTTL, directoryCacheTTL, extendedMapCacheTTL time.Duration) http.Handler {
+//
+// ctx controls the lifetime of the background-refresh goroutines this
+// function starts for the statsCache/extendedMapCache above (one each,
+// via BackgroundCache -- see backgroundcache.go): when ctx is done,
+// those goroutines stop refreshing (callers in flight keep serving the
+// last-known-good value). Callers that have a genuine process-lifetime
+// context already (e.g. cmd/netmap/main.go's
+// signal.NotifyContext-derived ctx, canceled on SIGINT/SIGTERM) should
+// pass it through here rather than context.Background(), so these
+// goroutines are torn down alongside the rest of the process on
+// shutdown instead of leaking past it; tests that don't care about
+// shutdown timing can pass context.Background() (NewRouter itself is
+// only ever called once per process/test server, so that's a
+// deliberate, bounded "lives for this process/test's lifetime" leak,
+// matching this package's existing ipRateLimiter/
+// invalidSubmissionTracker cleanup-goroutine convention in
+// ratelimit.go).
+func NewRouter(ctx context.Context, store storage.Store, grpcClient, p2pClient, walletHTTPClient collector.NodeClient, walletHTTPEnabled bool, adminCreds adminauth.Credentials, collectors map[string]CollectorConfig, statsCacheTTL, directoryCacheTTL, extendedMapCacheTTL time.Duration) http.Handler {
 	mux := http.NewServeMux()
 
 	// Created once and shared across every POST /nodes call (NewRouter
@@ -155,7 +172,7 @@ func NewRouter(store storage.Store, grpcClient, p2pClient, walletHTTPClient coll
 	// population. Same public, unauthenticated trust level -- NOT under
 	// /admin. GET /nodes/map itself is completely unchanged by this
 	// route's existence.
-	mux.HandleFunc("GET /nodes/map/extended", handleNodesMapExtended(store, extendedMapCacheTTL))
+	mux.HandleFunc("GET /nodes/map/extended", handleNodesMapExtended(ctx, store, extendedMapCacheTTL))
 
 	// Whole-population node counts + network-height snapshot (see
 	// internal/api/stats.go). Same trust level as the other read
@@ -165,7 +182,7 @@ func NewRouter(store storage.Store, grpcClient, p2pClient, walletHTTPClient coll
 	// is the API's first versioned route; future breaking changes to
 	// its response shape get their own /v2/ route instead of breaking
 	// existing callers in place.
-	mux.HandleFunc("GET /v1/stats", handleStats(store, statsCacheTTL))
+	mux.HandleFunc("GET /v1/stats", handleStats(ctx, store, statsCacheTTL))
 
 	// GET /v1/directory backs a third-party directory feed (TariTalk
 	// Nodes, see directory.go's doc comment / BRIEF.md's background)

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"golang.org/x/sync/singleflight"
 
 	"github.com/Jagtech-Services/go-tari-netmap/internal/collector"
 	"github.com/Jagtech-Services/go-tari-netmap/internal/storage"
@@ -115,12 +116,15 @@ type directoryResponse struct {
 
 // DefaultDirectoryCacheTTL is the default TTL handleDirectory's
 // in-process cache (see directoryCache below) is built with when the
-// caller doesn't override it. Alex's explicit instruction was "let it
-// get hammered" with a "5-10 second cache", picking 8s as the midpoint
-// -- following the exact same "pick the midpoint of the operator's
-// stated range" precedent DefaultStatsCacheTTL's own doc comment set
-// (20s as the midpoint of a 15-30s range).
-const DefaultDirectoryCacheTTL = 8 * time.Second
+// caller doesn't override it. Bumped from 8s to 60s per Alex's
+// explicit direction to bring every whole/near-whole-population cache
+// in this package to the same 60s TTL for consistency (see stats.go's
+// DefaultStatsCacheTTL doc comment for the full prod-incident
+// rationale) -- even though this cache is keyed per query-param
+// combination (lower thundering-herd risk than a single-valued cache,
+// since real traffic naturally splits across keys), there's no reason
+// for it to use a shorter window than its siblings.
+const DefaultDirectoryCacheTTL = 60 * time.Second
 
 // directoryCacheEntry is one cached, already-computed directoryResponse
 // plus the time it was computed at -- the per-key unit directoryCache
@@ -131,19 +135,33 @@ type directoryCacheEntry struct {
 }
 
 // directoryCache is handleDirectory's in-process TTL cache. Unlike
-// stats.go's statsCache (a single cached value, since GET /v1/stats
-// takes no query params), GET /v1/directory is parameterized
-// (?owner=/?class=/?limit=/?offset=), so this caches the WHOLE computed
-// directoryResponse per unique, normalized query-param combination --
-// map[string]directoryCacheEntry keyed by that normalized query string
-// (see directoryCacheKey below). One instance is created per
-// handleDirectory call (i.e. once per process, at router-construction
-// time -- see NewRouter), exactly mirroring statsCache's
-// once-per-process, sync.RWMutex-guarded, get()/set() shape -- this is
-// deliberately the SAME pattern, not a different caching approach,
-// just keyed instead of single-valued.
+// stats.go's statsCache/mapextended.go's extendedMapCache/
+// internal/web's dashboardCountsCache (all converted to a
+// BackgroundCache, see backgroundcache.go), this one is NOT: GET
+// /v1/directory is parameterized (?owner=/?class=/?limit=/?offset=),
+// and `owner` is an arbitrary, caller-supplied string with no bounded
+// set of values known ahead of time -- there is no way for a
+// ticker-driven background goroutine to "pre-warm" an unbounded,
+// not-enumerable-in-advance key space the way the other three caches'
+// single, fixed key can be. This is the concrete "doesn't fit" case
+// the dispatch brief for this fix anticipated: a background-refresh
+// goroutine genuinely has no well-defined set of keys to iterate here.
+//
+// Instead, this keeps its original per-key TTL cache shape (map[string]
+// directoryCacheEntry keyed by the normalized query string, see
+// directoryCacheKey below) and adds a golang.org/x/sync/singleflight.Group
+// to deduplicate concurrent cache-miss computations for the SAME key —
+// N simultaneous requests that all miss on an identical (owner, class,
+// limit, offset) combination now trigger exactly ONE
+// buildDirectoryResponse call, not N, closing the identical
+// thundering-herd gap stats.go's old statsCache had (see
+// handleDirectory below). Requests missing on DIFFERENT keys still
+// run independently and concurrently, same as before -- that's an
+// accepted, lower-risk shape (real traffic naturally splits across
+// keys), not a bug this fix needs to also collapse.
 type directoryCache struct {
-	ttl time.Duration
+	ttl   time.Duration
+	group singleflight.Group
 
 	mu      sync.RWMutex
 	entries map[string]directoryCacheEntry
@@ -391,8 +409,12 @@ func buildDirectoryResponse(ctx context.Context, store storage.Store, owner, cla
 // unauthenticated route a third party is expected to poll routinely. A
 // cacheTTL <= 0 disables caching entirely (every request always misses
 // and recomputes), falling out naturally from directoryCache.get's
-// time.Since(...) >= ttl check without any special-casing, exactly
-// mirroring handleStats' own cacheTTL <= 0 behavior.
+// time.Since(...) >= ttl check without any special-casing. Concurrent
+// cache misses on the SAME key are deduplicated via directoryCache's
+// singleflight.Group -- see its doc comment for exactly why this
+// endpoint uses that instead of the background-refresh pattern applied
+// to this package's other whole-population caches (stats.go,
+// mapextended.go, internal/web's dashboardCountsCache).
 //
 // PRIVACY NOTE: see GeoCoarse's doc comment for the anonymous-population
 // city/country-only cap this handler enforces via buildDirectoryResponse
@@ -439,12 +461,28 @@ func handleDirectory(store storage.Store, cacheTTL time.Duration) http.HandlerFu
 			return
 		}
 
-		resp, err := buildDirectoryResponse(r.Context(), store, owner, class, limit, offset)
+		// cache.group.Do coalesces every concurrent caller that misses
+		// on this exact key into a single buildDirectoryResponse call
+		// -- the actual fix (see directoryCache's doc comment): without
+		// this, N simultaneous requests that all miss on the same
+		// (owner, class, limit, offset) combination at once would each
+		// independently run the full whole-population scan and each
+		// hold their own result set in memory at once, exactly the
+		// thundering-herd shape that caused the live prod incident
+		// stats.go's statsCache doc comment documents for GET
+		// /v1/stats.
+		respAny, err, _ := cache.group.Do(key, func() (any, error) {
+			resp, err := buildDirectoryResponse(r.Context(), store, owner, class, limit, offset)
+			if err != nil {
+				return nil, err
+			}
+			cache.set(key, resp)
+			return resp, nil
+		})
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
-		cache.set(key, resp)
-		writeJSON(w, http.StatusOK, resp)
+		writeJSON(w, http.StatusOK, respAny.(directoryResponse))
 	}
 }
