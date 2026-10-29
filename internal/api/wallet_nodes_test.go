@@ -24,7 +24,7 @@ import (
 func newTestServerWithWalletHTTP(t *testing.T, walletClient collector.NodeClient, walletHTTPEnabled bool) (*httptest.Server, storage.Store) {
 	t.Helper()
 	store := newTestStore(t)
-	srv := httptest.NewServer(api.NewRouter(store, nil, nil, walletClient, walletHTTPEnabled,
+	srv := httptest.NewServer(api.NewRouter(t.Context(), store, nil, nil, walletClient, walletHTTPEnabled,
 		adminauth.Credentials{Username: testAdminUser, Password: testAdminPassword}, testCollectorKeys(), api.DefaultStatsCacheTTL, api.DefaultDirectoryCacheTTL, api.DefaultExtendedMapCacheTTL))
 	t.Cleanup(srv.Close)
 	return srv, store

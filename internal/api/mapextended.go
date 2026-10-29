@@ -4,7 +4,6 @@ import (
 	"context"
 	"net/http"
 	"sort"
-	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -48,52 +47,26 @@ type AnonymousCluster struct {
 	LastObservedAt  time.Time `json:"last_observed_at"`
 }
 
-// DefaultExtendedMapCacheTTL is the default TTL
-// handleNodesMapExtended's in-process cache (see extendedMapCache
-// below) is built with when the caller doesn't override it -- 20s,
-// matching DefaultStatsCacheTTL's own precedent for a whole-population
-// aggregate route with no query params to key a cache on.
-const DefaultExtendedMapCacheTTL = 20 * time.Second
+// DefaultExtendedMapCacheTTL is the default refresh interval
+// handleNodesMapExtended's background-refresh cache (see extendedMapCache
+// below) is built with when the caller doesn't override it -- 60s, per
+// Alex's explicit direction applied consistently across every
+// whole-population cache in this package (see stats.go's
+// DefaultStatsCacheTTL doc comment for the full prod-incident
+// rationale this mirrors).
+const DefaultExtendedMapCacheTTL = 60 * time.Second
 
-// extendedMapCache is handleNodesMapExtended's in-process TTL cache for
-// the whole computed ExtendedMapResponse. Unlike directory.go's
-// directoryCache (keyed per query-param combination), this endpoint has
-// no query params at all, so a single cached value suffices -- this is
-// exactly stats.go's statsCache shape, just caching a different response
-// type. One instance is created per handleNodesMapExtended call (i.e.
-// once per process, at router-construction time -- see NewRouter),
-// guarded by a sync.RWMutex, matching this package's existing
-// once-per-process cache convention.
-type extendedMapCache struct {
-	ttl time.Duration
-
-	mu         sync.RWMutex
-	response   ExtendedMapResponse
-	computedAt time.Time
-	valid      bool
-}
-
-// get returns the cached response and true if it exists and is still
-// within ttl of when it was computed; otherwise it returns the zero
-// value and false (cache miss/expiry -- the caller must recompute).
-func (c *extendedMapCache) get() (ExtendedMapResponse, bool) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	if !c.valid || time.Since(c.computedAt) >= c.ttl {
-		return ExtendedMapResponse{}, false
-	}
-	return c.response, true
-}
-
-// set stores resp as the new cached value, stamped with the current
-// time -- the starting point for the next get's TTL check.
-func (c *extendedMapCache) set(resp ExtendedMapResponse) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.response = resp
-	c.computedAt = time.Now()
-	c.valid = true
-}
+// extendedMapCache is handleNodesMapExtended's background-refresh cache
+// for the whole computed ExtendedMapResponse (see BackgroundCache in
+// backgroundcache.go). Unlike directory.go's directoryCache (keyed per
+// query-param combination -- an unbounded key space a ticker can't
+// pre-warm), this endpoint has no query params at all, so a single
+// background-refreshed value suffices -- exactly stats.go's statsCache
+// shape, just caching a different response type. A single long-lived
+// goroutine (started in handleNodesMapExtended below) owns recomputing
+// this on its own ticker; handleNodesMapExtended only ever reads the
+// last-computed value, never recomputes on the request path.
+type extendedMapCache = BackgroundCache[ExtendedMapResponse]
 
 // cityKey is the exact (city, country) string-match grouping key used
 // both to bucket anonymous candidates into clusters and to build the
@@ -351,27 +324,31 @@ func buildExtendedMapResponse(ctx context.Context, store storage.Store) (Extende
 // GetGeoIPCache), not a new write, not a new classification stored
 // anywhere.
 //
-// The full computed ExtendedMapResponse is cached in-process for
-// cacheTTL (see extendedMapCache above and DefaultExtendedMapCacheTTL)
-// -- this endpoint has no query params to key a cache on, so, like
-// stats.go's handleStats, a single cached value is shared across every
-// request. A cacheTTL <= 0 disables caching entirely, falling out
-// naturally from extendedMapCache.get's time.Since(...) >= ttl check.
-func handleNodesMapExtended(store storage.Store, cacheTTL time.Duration) http.HandlerFunc {
-	cache := &extendedMapCache{ttl: cacheTTL}
+// The full computed ExtendedMapResponse is served from a
+// background-refresh extendedMapCache (see its doc comment above) keyed
+// off ctx's lifetime and cacheTTL (DefaultExtendedMapCacheTTL if the
+// caller doesn't care) -- this endpoint has no query params to key a
+// cache on, so, like stats.go's handleStats, a single background-
+// refreshed value is shared across every request; this handler only
+// ever reads it, never recomputes on the request path. ctx controls
+// the background goroutine's lifetime (e.g. cmd/netmap/main.go's
+// process-lifetime signal.NotifyContext ctx) -- see NewRouter's doc
+// comment.
+func handleNodesMapExtended(ctx context.Context, store storage.Store, cacheTTL time.Duration) http.HandlerFunc {
+	cache := NewBackgroundCache(ctx, "extended-map", cacheTTL, func(ctx context.Context) (ExtendedMapResponse, error) {
+		return buildExtendedMapResponse(ctx, store)
+	})
 
 	return func(w http.ResponseWriter, r *http.Request) {
-		if resp, ok := cache.get(); ok {
-			writeJSON(w, http.StatusOK, resp)
-			return
-		}
-
-		resp, err := buildExtendedMapResponse(r.Context(), store)
+		resp, err := cache.Get(r.Context())
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, err)
+			// See statsCache's handleStats for when this is reachable
+			// at all -- only while the very first background compute
+			// is still outstanding and the request's own context gets
+			// canceled/times out first.
+			writeError(w, http.StatusServiceUnavailable, err)
 			return
 		}
-		cache.set(resp)
 		writeJSON(w, http.StatusOK, resp)
 	}
 }

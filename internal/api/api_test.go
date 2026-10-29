@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -193,7 +194,7 @@ func newTestServerWithCreds(t *testing.T, client collector.NodeClient, creds adm
 	// p2pClient is nil here: these tests only exercise the gRPC-labeled
 	// async health-check kickoff path; dual-probe behavior is covered by
 	// internal/collector's own tests.
-	srv := httptest.NewServer(api.NewRouter(store, client, nil, nil, true, creds, testCollectorKeys(), api.DefaultStatsCacheTTL, api.DefaultDirectoryCacheTTL, api.DefaultExtendedMapCacheTTL))
+	srv := httptest.NewServer(api.NewRouter(t.Context(), store, client, nil, nil, true, creds, testCollectorKeys(), api.DefaultStatsCacheTTL, api.DefaultDirectoryCacheTTL, api.DefaultExtendedMapCacheTTL))
 	t.Cleanup(srv.Close)
 	return srv, store
 }
@@ -3005,13 +3006,33 @@ func TestNodesMapEndpointEmpty(t *testing.T) {
 // these, so asserting the query count stays unchanged across a second
 // request within the TTL window proves the DB was only ever touched by
 // the first (cache-miss) request.
+//
+// block/blocked (both nil by default -- every EXISTING use of this
+// type leaves them unset and is completely unaffected) let
+// TestStatsEndpointConcurrentCacheMissesAreCoalesced below hold a
+// single "slow recompute" open deliberately: if block is non-nil,
+// ListNodes closes blocked (exactly once, signaling "the slow
+// recompute has genuinely started") and then blocks until block itself
+// is closed, before delegating to the real store.
 type countingStatsStore struct {
 	storage.Store
 	queries atomic.Int32
+
+	block       <-chan struct{}
+	blocked     chan struct{}
+	blockedOnce sync.Once
 }
 
 func (c *countingStatsStore) ListNodes(ctx context.Context, filter storage.NodeFilter) ([]storage.Node, error) {
 	c.queries.Add(1)
+	if c.block != nil {
+		c.blockedOnce.Do(func() {
+			if c.blocked != nil {
+				close(c.blocked)
+			}
+		})
+		<-c.block
+	}
 	return c.Store.ListNodes(ctx, filter)
 }
 
@@ -3037,7 +3058,7 @@ func (c *countingStatsStore) NetworkHeight(ctx context.Context) (*int64, int, er
 // specifically exercise the cache's own timing behavior.
 func newTestServerWithStatsCacheTTL(t *testing.T, store storage.Store, ttl time.Duration) *httptest.Server {
 	t.Helper()
-	srv := httptest.NewServer(api.NewRouter(store, collector.NewStubClient(), nil, nil, true, adminauth.Credentials{Username: testAdminUser, Password: testAdminPassword}, testCollectorKeys(), ttl, api.DefaultDirectoryCacheTTL, api.DefaultExtendedMapCacheTTL))
+	srv := httptest.NewServer(api.NewRouter(t.Context(), store, collector.NewStubClient(), nil, nil, true, adminauth.Credentials{Username: testAdminUser, Password: testAdminPassword}, testCollectorKeys(), ttl, api.DefaultDirectoryCacheTTL, api.DefaultExtendedMapCacheTTL))
 	t.Cleanup(srv.Close)
 	return srv
 }
@@ -3141,5 +3162,137 @@ func TestStatsEndpointCacheExpiresAfterTTL(t *testing.T) {
 	}
 	if second.TotalNodes != first.TotalNodes+1 {
 		t.Errorf("second.TotalNodes = %d, want %d (%d + the newly-seeded node, proving the post-expiry response was recomputed)", second.TotalNodes, first.TotalNodes+1, first.TotalNodes)
+	}
+}
+
+// getStatsErr is getStats without the t.Fatalf calls -- safe to call
+// from a non-test goroutine (t.Fatal/FailNow must only ever be called
+// from the goroutine running the test function itself), returning any
+// transport/decode/status error instead for the caller to collect and
+// assert on after every goroutine has finished.
+func getStatsErr(srv *httptest.Server) (statsResponseForTest, error) {
+	resp, err := http.Get(srv.URL + "/v1/stats")
+	if err != nil {
+		return statsResponseForTest{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return statsResponseForTest{}, fmt.Errorf("status = %d, want %d (body: %s)", resp.StatusCode, http.StatusOK, body)
+	}
+	var got statsResponseForTest
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		return statsResponseForTest{}, fmt.Errorf("decode: %w", err)
+	}
+	return got, nil
+}
+
+// TestStatsEndpointConcurrentCacheMissesAreCoalesced is this fix's
+// hard, non-optional regression-test requirement: it proves N (20)
+// concurrent GET /v1/stats requests that all land during the SAME
+// slow, in-flight first-ever recompute trigger exactly ONE underlying
+// store.ListNodes call (and, transitively, exactly one full
+// FetchNodeCounts+NetworkHeight recompute), not N -- i.e. that
+// BackgroundCache's lazily-started background goroutine, not any of
+// the N concurrent HTTP requests, is the sole owner of that recompute.
+// This is the structural fix for the live-reproduced prod incident
+// documented on api.DefaultStatsCacheTTL: a SIGQUIT goroutine dump
+// showed exactly this shape (12 concurrent GET /v1/stats requests, all
+// missing the old on-demand, non-deduplicated statsCache at once, each
+// independently recomputing and holding its own whole-population
+// result set in memory simultaneously).
+//
+// Proof this fails against the pre-fix code: reverting internal/api's
+// statsCache/handleStats back to the plain get()/set() TTL cache (no
+// deduplication -- the code this branch's parent commit, 790f4e9, shipped
+// with) against this exact same test reliably yields a final query
+// count of 4*N (80), not 4, because each of the N concurrently-blocked
+// requests independently calls FetchNodeCounts+NetworkHeight once
+// released -- confirmed by hand while writing this test, per this
+// dispatch's hard requirement to prove the regression test actually
+// catches the bug it claims to.
+func TestStatsEndpointConcurrentCacheMissesAreCoalesced(t *testing.T) {
+	realStore := newTestStore(t)
+	ctx := context.Background()
+	if _, err := realStore.UpsertConfirmedNode(ctx, "stats-coalesce-1:1", []byte("stats-coalesce-pubkey-1"), storage.DiscoverySourceP2P); err != nil {
+		t.Fatalf("seed node: %v", err)
+	}
+
+	block := make(chan struct{})
+	blocked := make(chan struct{})
+	counting := &countingStatsStore{Store: realStore, block: block, blocked: blocked}
+
+	// A generous TTL: this test only cares about the very first,
+	// deliberately-slow-held-open recompute -- nothing here should
+	// ever trigger a second one via TTL expiry.
+	srv := newTestServerWithStatsCacheTTL(t, counting, time.Minute)
+
+	const n = 20
+	results := make([]statsResponseForTest, n)
+	errs := make([]error, n)
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		// This first request is the one that lazily starts
+		// BackgroundCache's background goroutine (see
+		// BackgroundCache.Get) and, via countingStatsStore.ListNodes,
+		// blocks on <-block below -- holding the "slow recompute"
+		// open for every other request fired below to land on top
+		// of.
+		results[0], errs[0] = getStatsErr(srv)
+	}()
+
+	// Wait until that first request's ListNodes call has genuinely
+	// entered its blocking read (not just "the goroutine was
+	// scheduled") before firing the rest, so this test deterministically
+	// exercises "N requests landing during one in-flight recompute"
+	// rather than racing on whether the first request got there first.
+	select {
+	case <-blocked:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for the first request's underlying ListNodes call to start blocking")
+	}
+
+	for i := 1; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			results[i], errs[i] = getStatsErr(srv)
+		}(i)
+	}
+
+	// Give the other N-1 goroutines a real chance to actually issue
+	// their HTTP requests and land inside BackgroundCache.Get's
+	// "waiting on ready" path before releasing the held-open
+	// recompute -- otherwise this test could pass trivially merely
+	// because it never actually got all N requests in flight at once.
+	time.Sleep(100 * time.Millisecond)
+	close(block)
+
+	wg.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("request %d: %v", i, err)
+		}
+	}
+
+	// FetchNodeCounts issues ListNodes + ListNodeAddressesForNodes +
+	// CountNodes (FetchConfirmed24h), plus handleStats' own separate
+	// NetworkHeight call -- 4 underlying store calls per full
+	// recompute. Asserting exactly 4 (not 4*n) is the crux of this
+	// test: it proves every one of the n concurrent requests above
+	// was served by the exact same single recompute, not n
+	// independent ones.
+	if got := counting.queries.Load(); got != 4 {
+		t.Errorf("underlying store was queried %d times total across %d concurrent requests all landing during the same in-flight recompute, want exactly 4 (one full recompute -- ListNodes+ListNodeAddressesForNodes+CountNodes+NetworkHeight -- shared by all %d requests, not %d independent ones)", got, n, n, n)
+	}
+
+	for i, r := range results {
+		if r != results[0] {
+			t.Errorf("results[%d] = %+v, want identical to results[0] = %+v (every concurrent request must observe the exact same single recompute)", i, r, results[0])
+		}
 	}
 }

@@ -72,7 +72,7 @@ func TestCollectorReportRequiresValidKey(t *testing.T) {
 // unconditionally 503s -- even with what would otherwise be a valid key.
 func TestCollectorReportDisabledWhenUnconfigured(t *testing.T) {
 	store := newTestStore(t)
-	srv := httptest.NewServer(api.NewRouter(store, nil, nil, nil, true, adminauth.Credentials{Username: testAdminUser, Password: testAdminPassword}, nil, api.DefaultStatsCacheTTL, api.DefaultDirectoryCacheTTL, api.DefaultExtendedMapCacheTTL))
+	srv := httptest.NewServer(api.NewRouter(t.Context(), store, nil, nil, nil, true, adminauth.Credentials{Username: testAdminUser, Password: testAdminPassword}, nil, api.DefaultStatsCacheTTL, api.DefaultDirectoryCacheTTL, api.DefaultExtendedMapCacheTTL))
 	t.Cleanup(srv.Close)
 
 	body := `{"self_identity":[],"confirmed_nodes":[],"discovered_nodes":[],"health_checks":[],"peer_edges":[]}`

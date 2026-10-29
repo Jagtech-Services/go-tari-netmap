@@ -145,7 +145,7 @@ func TestCreateWalletNodeSubmissionProbesAreBounded(t *testing.T) {
 		t.Fatalf("upsert node: %v", err)
 	}
 
-	handler := api.NewRouter(store, nil, nil, client, true,
+	handler := api.NewRouter(t.Context(), store, nil, nil, client, true,
 		adminauth.Credentials{Username: testAdminUser, Password: testAdminPassword},
 		testCollectorKeys(), api.DefaultStatsCacheTTL, api.DefaultDirectoryCacheTTL, api.DefaultExtendedMapCacheTTL)
 
