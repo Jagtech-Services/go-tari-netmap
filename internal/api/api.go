@@ -97,6 +97,13 @@ func NewRouter(store storage.Store, grpcClient, p2pClient, walletHTTPClient coll
 	limiter := newIPRateLimiter()
 	lockouts := newInvalidSubmissionTracker()
 
+	// Shared, bounded worker pool for the best-effort, non-blocking submission
+	// probes kicked off by handleCreateNode and handleCreateWalletNodeSubmission
+	// below (see asyncpool.go's doc comment for the full rationale and the
+	// prod incident this fixes) -- one instance per NewRouter call, matching
+	// limiter/lockouts' own process-lifetime convention.
+	probePool := newAsyncProbePool()
+
 	// pollWalletHTTPClient is what gets passed into collector.PollOnce at the two
 	// OLD-flow call sites below (handleApproveSubmission's async post-approval poll,
 	// handlePollNow's admin force-poll) -- deliberately nil'd out whenever
@@ -126,7 +133,7 @@ func NewRouter(store storage.Store, grpcClient, p2pClient, walletHTTPClient coll
 	mux.HandleFunc("GET /docs", handleAPIDocs)
 
 	mux.HandleFunc("GET /nodes", handleListNodes(store))
-	mux.HandleFunc("POST /nodes", handleCreateNode(store, grpcClient, p2pClient, limiter, lockouts))
+	mux.HandleFunc("POST /nodes", handleCreateNode(store, grpcClient, p2pClient, limiter, lockouts, probePool))
 	mux.HandleFunc("GET /nodes/{id}", handleGetNode(store))
 	mux.HandleFunc("GET /nodes/{id}/history", handleGetNodeHistory(store))
 	mux.HandleFunc("GET /nodes/{id}/edges", handleGetNodeEdges(store))
@@ -212,7 +219,7 @@ func NewRouter(store storage.Store, grpcClient, p2pClient, walletHTTPClient coll
 	// off for this deployment" (testnet), which is better modeled as "this route doesn't
 	// exist here at all" than "exists but always errors".
 	if walletHTTPEnabled {
-		mux.HandleFunc("POST /wallet-nodes", handleCreateWalletNodeSubmission(store, walletHTTPClient, limiter, lockouts))
+		mux.HandleFunc("POST /wallet-nodes", handleCreateWalletNodeSubmission(store, walletHTTPClient, limiter, lockouts, probePool))
 	}
 
 	// Every /admin/* route — the submission review queue (list/approve/
@@ -381,7 +388,7 @@ func (p *flexPort) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-func handleCreateNode(store storage.Store, grpcClient, p2pClient collector.NodeClient, limiter *ipRateLimiter, lockouts *invalidSubmissionTracker) http.HandlerFunc {
+func handleCreateNode(store storage.Store, grpcClient, p2pClient collector.NodeClient, limiter *ipRateLimiter, lockouts *invalidSubmissionTracker, probePool *asyncProbePool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req createNodeRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -485,12 +492,15 @@ func handleCreateNode(store storage.Store, grpcClient, p2pClient collector.NodeC
 		}
 
 		// Best-effort, non-blocking connectivity probe for the human
-		// reviewer's benefit — launched via `go` and never awaited, so
-		// it cannot delay this response. Uses its own
-		// context.Background()-derived timeout (see probeSubmission's
-		// doc comment) since r.Context() is canceled once this handler
-		// returns.
-		go probeSubmission(store, grpcClient, p2pClient, submission.ID, address)
+		// reviewer's benefit — submitted to the shared, bounded probePool
+		// (see asyncpool.go) rather than a bare `go`, so a flood of
+		// submissions can never spawn unbounded probe goroutines/DB
+		// connections. Uses its own context.Background()-derived timeout
+		// (see probeSubmission's doc comment) since r.Context() is canceled
+		// once this handler returns.
+		probePool.Submit(func() {
+			probeSubmission(store, grpcClient, p2pClient, submission.ID, address)
+		})
 
 		writeJSON(w, http.StatusAccepted, submission)
 	}
